@@ -10,14 +10,65 @@ export const Sender = () => {
     socket.onopen = () => {
       socket.send(
         JSON.stringify({
-          type: "sender",
+          type: "identify-as-sender",
         })
       );
     };
   }, []);
 
-  const initiateConn = async () => {
-    // implement 1
+  const startSendingVideo = async () => {
+    if (!socket) {
+      return;
+    }
+    // create an offer
+    const pc = new RTCPeerConnection();
+
+    pc.onnegotiationneeded = async () => {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket?.send(
+        JSON.stringify({
+          type: "create-offer",
+          sdp: pc.localDescription,
+        })
+      );
+    };
+    const offer = await pc.createOffer(); // -->  sdp
+
+    await pc.setLocalDescription(offer);
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket?.send(
+          JSON.stringify({
+            type: "ice-candidate",
+            candidate: event.candidate,
+          })
+        );
+      }
+    };
+
+    socket?.send(
+      JSON.stringify({ type: "create-offer", sdp: pc.localDescription })
+    );
+
+    socket?.send(
+      JSON.stringify({
+        type: "create-offer",
+        sdp: pc.localDescription,
+      })
+    );
+
+    // trickle ice
+
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "create-offer") {
+        pc.setRemoteDescription(data.sdp);
+      } else if (data.type === "ice-candidate") {
+        pc.addIceCandidate(data.candidate);
+      }
+    };
   };
 
   const getCameraStreamAndSend = (pc: RTCPeerConnection) => {
@@ -27,7 +78,7 @@ export const Sender = () => {
   return (
     <div>
       Sender
-      <button onClick={initiateConn}> Send data </button>
+      <button onClick={startSendingVideo}> Send data </button>
     </div>
   );
 };
