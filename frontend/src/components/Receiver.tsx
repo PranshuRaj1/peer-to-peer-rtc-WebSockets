@@ -1,59 +1,107 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export const Receiver = () => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8080");
-    let pc: RTCPeerConnection | null = null;
-    socket.onopen = () => {
-      socket.send(
-        JSON.stringify({
-          type: "identify-as-receiver",
-        })
-      );
+    // 1) Open WebSocket and identify as receiver
+    const newSocket = new WebSocket("ws://localhost:8080");
+    socketRef.current = newSocket;
+
+    newSocket.onopen = () => {
+      console.log("Connected to WebSocket (receiver)");
+      newSocket.send(JSON.stringify({ type: "identify-as-receiver" }));
     };
-    socket.onmessage = async (event) => {
+
+    // 2) Define onmessage *once*, but refer to pcRef.current so that
+    //    we always see the latest peer connection.
+    newSocket.onmessage = async (event) => {
       const message = JSON.parse(event.data);
+      console.log("Receiver got:", message);
 
       if (message.type === "create-offer") {
-        if (!pc) {
-          pc = new RTCPeerConnection();
+        console.log("Offer arrived at Receiver");
+        // Create a fresh PC and stash it in pcRef
+        const newPC = new RTCPeerConnection();
+        pcRef.current = newPC;
 
-          pc.onicecandidate = (event) => {
-            if (event.candidate) {
-              socket.send(
-                JSON.stringify({
-                  type: "ice-candidate",
-                  candidate: event.candidate,
-                })
-              );
-            }
-          };
+        // Send any ICE candidates from Receiver → Sender
+        newPC.onicecandidate = (e) => {
+          if (e.candidate) {
+            socketRef.current!.send(
+              JSON.stringify({
+                type: "ice-candidate",
+                candidate: e.candidate,
+              })
+            );
+          }
+        };
 
-          pc.ontrack = (event) => {
-            console.log("📺 Received track:", event.streams[0]);
-            const video = document.getElementById("remote") as HTMLVideoElement;
-            if (video) {
-              video.srcObject = event.streams[0];
-              video.play();
-            }
-          };
+        // When a remote track arrives, stick it into our <video>
+        newPC.ontrack = (e) => {
+          console.log("Receiver ontrack:", e.track.kind);
+          // Usually e.streams[0] exists:
+          if (e.streams && e.streams[0]) {
+            videoRef.current!.srcObject = e.streams[0];
+            videoRef.current!.onloadedmetadata = () =>
+              videoRef.current!.play().catch((err) => console.error(err));
+          } else {
+            // Fallback: build a new MediaStream from the single track
+            const ms = new MediaStream([e.track]);
+            videoRef.current!.srcObject = ms;
+            videoRef.current!.onloadedmetadata = () =>
+              videoRef.current!.play().catch((err) => console.error(err));
+          }
+        };
+
+        // 3) Set remote SDP (the offer)
+        await newPC.setRemoteDescription(
+          new RTCSessionDescription(message.sdp)
+        );
+        console.log("Receiver: remote offer set");
+
+        // 4) Drain any pending ICE candidates that arrived earlier
+        for (const cand of pendingCandidates.current) {
+          await newPC.addIceCandidate(cand);
         }
+        pendingCandidates.current = [];
 
-        await pc.setRemoteDescription(message.sdp);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        socket.send(
+        // 5) Create and send Answer
+        const answer = await newPC.createAnswer();
+        await newPC.setLocalDescription(answer);
+        newSocket.send(
           JSON.stringify({
             type: "create-answer",
-            sdp: pc.localDescription,
+            sdp: newPC.localDescription,
           })
         );
-      } else if (message.type === "ice-candidate" && pc) {
-        await pc.addIceCandidate(message.candidate);
+      } else if (message.type === "ice-candidate") {
+        const existingPC = pcRef.current;
+        if (existingPC && existingPC.remoteDescription) {
+          console.log("Receiver: adding ICE candidate live");
+          await existingPC.addIceCandidate(message.candidate);
+        } else {
+          console.log("Receiver: queuing ICE because PC not ready yet");
+          pendingCandidates.current.push(message.candidate);
+        }
       }
     };
-  }, []);
+  }, []); // run once on mount
 
-  return <div>RR</div>;
+  return (
+    <div>
+      <h2>Receiver</h2>
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        controls
+        style={{ width: "100%", maxWidth: "600px", backgroundColor: "black" }}
+      />
+    </div>
+  );
 };

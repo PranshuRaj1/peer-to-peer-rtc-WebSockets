@@ -1,44 +1,55 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export const Sender = () => {
-  const [socket, setSocket] = useState<WebSocket | null>(null);
-  const [pc, setPC] = useState<RTCPeerConnection | null>(null);
+  const [started, setStarted] = useState(false);
+  const socketRef = useRef<WebSocket | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8080");
-    setSocket(socket);
-    socket.onopen = () => {
-      socket.send(
-        JSON.stringify({
-          type: "identify-as-sender",
-        })
-      );
+    const newSocket = new WebSocket("ws://localhost:8080");
+    socketRef.current = newSocket;
+
+    newSocket.onopen = () => {
+      console.log("🔌 Connected to WebSocket (sender)");
+      newSocket.send(JSON.stringify({ type: "identify-as-sender" }));
     };
-  }, []);
+
+    // Define onmessage once, but use pcRef.current
+    newSocket.onmessage = async (event) => {
+      const message = JSON.parse(event.data);
+      console.log("Sender got:", message);
+
+      if (message.type === "create-answer") {
+        const existingPC = pcRef.current;
+        if (existingPC) {
+          console.log("Sender: setting remote answer…");
+          await existingPC.setRemoteDescription(
+            new RTCSessionDescription(message.sdp)
+          );
+        }
+      } else if (message.type === "ice-candidate") {
+        const existingPC = pcRef.current;
+        if (existingPC && existingPC.remoteDescription) {
+          console.log("Sender: adding ICE candidate");
+          await existingPC.addIceCandidate(message.candidate);
+        }
+      }
+    };
+  }, []); // run once
 
   const startSendingVideo = async () => {
-    if (!socket) {
-      return;
-    }
-    // create an offer
-    const pc = new RTCPeerConnection();
+    if (started) return;
+    setStarted(true);
 
-    pc.onnegotiationneeded = async () => {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket?.send(
-        JSON.stringify({
-          type: "create-offer",
-          sdp: pc.localDescription,
-        })
-      );
-    };
-    const offer = await pc.createOffer(); // -->  sdp
+    // 1) Create a new RTCPeerConnection and stash it in ref
+    const newPC = new RTCPeerConnection();
+    pcRef.current = newPC;
 
-    await pc.setLocalDescription(offer);
-    pc.onicecandidate = (event) => {
+    // 2) When ICE candidate is found at Sender → send to Receiver
+    newPC.onicecandidate = (event) => {
       if (event.candidate) {
-        socket?.send(
+        socketRef.current!.send(
           JSON.stringify({
             type: "ice-candidate",
             candidate: event.candidate,
@@ -47,41 +58,49 @@ export const Sender = () => {
       }
     };
 
-    socket?.send(
-      JSON.stringify({ type: "create-offer", sdp: pc.localDescription })
-    );
-
-    socket?.send(
-      JSON.stringify({
-        type: "create-offer",
-        sdp: pc.localDescription,
-      })
-    );
-
-    // trickle ice
-
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.type === "create-answer") {
-        pc.setRemoteDescription(data.sdp);
-      } else if (data.type === "ice-candidate") {
-        pc.addIceCandidate(data.candidate);
-      }
+    // 3) (Optional) Log connection state changes
+    newPC.onconnectionstatechange = () => {
+      console.log("Sender connection state:", newPC.connectionState);
     };
 
+    // 4) Get local camera stream & add tracks
     const stream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: false,
     });
+    // Show local preview
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+    // Add each track to the newPC
+    stream.getTracks().forEach((track) => newPC.addTrack(track, stream));
 
-    pc.addTrack(stream.getVideoTracks()[0]);
+    // 5) Create Offer, set local SDP, send Offer→Receiver
+    const offer = await newPC.createOffer();
+    await newPC.setLocalDescription(offer);
+
+    socketRef.current!.send(
+      JSON.stringify({
+        type: "create-offer",
+        sdp: newPC.localDescription,
+      })
+    );
   };
 
   return (
     <div>
-      Sender
-      <button onClick={startSendingVideo}> Send data </button>
+      <h2>🎥 Sender</h2>
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        controls
+        style={{ width: "100%", maxWidth: "600px" }}
+      />
+      <button onClick={startSendingVideo} disabled={started}>
+        {started ? "Streaming…" : "Start Sending"}
+      </button>
     </div>
   );
 };
