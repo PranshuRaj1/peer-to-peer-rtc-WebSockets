@@ -45,11 +45,11 @@ ws.on("connection", function connection(ws) {
       console.log("Receiver connected");
     } else if (message.type === "create-offer") {
       receiverSocket?.send(
-        JSON.stringify({ type: "create-offer", sdp: message.offer })
+        JSON.stringify({ type: "create-offer", sdp: message.sdp })
       );
     } else if (message.type === "create-answer") {
       senderSocket?.send(
-        JSON.stringify({ type: "create-answer", sdp: message.offer })
+        JSON.stringify({ type: "create-answer", sdp: message.sdp })
       );
     } else if (message.type === "ice-candidate") {
       if (ws === senderSocket) {
