@@ -63,16 +63,19 @@ export const Sender = () => {
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.type === "create-offer") {
+      if (data.type === "create-answer") {
         pc.setRemoteDescription(data.sdp);
       } else if (data.type === "ice-candidate") {
         pc.addIceCandidate(data.candidate);
       }
     };
-  };
 
-  const getCameraStreamAndSend = (pc: RTCPeerConnection) => {
-    // implement 2
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false,
+    });
+
+    pc.addTrack(stream.getVideoTracks()[0]);
   };
 
   return (

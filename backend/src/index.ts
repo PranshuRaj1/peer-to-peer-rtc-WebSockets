@@ -8,6 +8,8 @@ import { WebSocketServer, WebSocket } from "ws";
 
 const ws = new WebSocketServer({ port: 8080 });
 
+console.log(" WebSocket server is running on ws://localhost:8080");
+
 let senderSocket: null | WebSocket = null;
 let receiverSocket: null | WebSocket = null;
 
@@ -37,14 +39,18 @@ ws.on("connection", function connection(ws) {
 
     if (message.type === "identify-as-sender") {
       senderSocket = ws;
+      console.log("Sender connected");
     } else if (message.type === "identify-as-receiver") {
       receiverSocket = ws;
+      console.log("Receiver connected");
     } else if (message.type === "create-offer") {
       receiverSocket?.send(
-        JSON.stringify({ type: "offer", sdp: message.offer })
+        JSON.stringify({ type: "create-offer", sdp: message.offer })
       );
     } else if (message.type === "create-answer") {
-      senderSocket?.send(JSON.stringify({ type: "offer", sdp: message.offer }));
+      senderSocket?.send(
+        JSON.stringify({ type: "create-answer", sdp: message.offer })
+      );
     } else if (message.type === "ice-candidate") {
       if (ws === senderSocket) {
         receiverSocket?.send(
